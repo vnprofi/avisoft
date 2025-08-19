@@ -18,10 +18,20 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 
-# Fallback for direct execution
+# Import parser module regardless of execution context (package / script / PyInstaller)
 try:
+    # When running via "python -m src.gui" or as part of a package
     from . import parser as avito_parser  # type: ignore
-except ImportError:
+except ImportError:  # running as plain script or bundled by PyInstaller
+    import os
+    import sys
+    from pathlib import Path
+
+    # Ensure directory containing this file is on sys.path
+    current_dir = Path(__file__).resolve().parent
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+
     import parser as avito_parser  # type: ignore
 
 
