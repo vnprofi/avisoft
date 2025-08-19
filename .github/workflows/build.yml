@@ -33,6 +33,7 @@ jobs:
           pip install --no-cache-dir -r requirements.txt
 
       - name: Verify deps
+        shell: bash
         run: |
           python - << 'PY'
           import PyQt6, qasync, pandas, openpyxl, sys, platform
