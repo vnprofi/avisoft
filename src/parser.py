@@ -1,4 +1,6 @@
 import requests
+from playwright.sync_api import sync_playwright
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 import csv
@@ -94,9 +96,18 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
     for page in range(1, max_pages + 1):
         url = listing_url if page == 1 else _get_next_page_url(listing_url, page)
         resp = session.get(url, headers=headers, timeout=30)
-        if resp.status_code != 200:
-            break
-        parsed = _parse_listing_page(resp.text)
+        html_text = resp.text if resp.status_code == 200 else ""
+
+        parsed = _parse_listing_page(html_text)
+
+        # If no products extracted from requests, try Playwright for this page
+        if not parsed["products"]:
+            try:
+                html_text = _fetch_html_playwright(url)
+                parsed = _parse_listing_page(html_text)
+            except Exception:
+                # Playwright may fail in headless environment; keep empty
+                pass
         # On first page get seller info
         if page == 1:
             seller_info = parsed["seller_info"]
@@ -108,6 +119,46 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
         if len(products) < 50:
             break
     return {"total_products": len(all_products), "products": all_products, "seller_info": seller_info}
+
+
+# ------------------ Playwright helper ------------------
+
+
+def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 30) -> str:
+    """Load page in Playwright, scroll to bottom to load items, return HTML."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+            locale="ru-RU",
+            timezone_id="Europe/Moscow",
+        )
+        page = context.new_page()
+        # Avoid detection
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+
+        page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(2)
+
+        scroll_attempts = 0
+        last_items = 0
+
+        while scroll_attempts < max_scroll_attempts:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(scroll_pause)
+            new_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+            if new_items == last_items:
+                scroll_attempts += 1
+            else:
+                scroll_attempts = 0
+                last_items = new_items
+            if scroll_attempts >= 3:
+                break
+
+        html = page.content()
+        browser.close()
+        return html
 
 
 def save_to_csv(data: Dict, filename: str):

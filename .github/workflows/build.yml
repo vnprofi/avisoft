@@ -32,6 +32,10 @@ jobs:
         run: |
           pip install --no-cache-dir -r requirements.txt
 
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install chromium
+
       - name: Verify deps
         shell: bash
         run: |
@@ -52,6 +56,7 @@ jobs:
             --hidden-import qasync \
             --hidden-import src.parser \
             --hidden-import parser \
+            --hidden-import playwright.sync_api \
             src/gui.py
         shell: bash
 
