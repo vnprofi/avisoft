@@ -1,0 +1,71 @@
+name: Build Avito Seller Parser
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        python-version: ["3.11"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Upgrade pip & install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade setuptools wheel
+          pip install pyinstaller
+
+      - name: Install Python dependencies
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Verify deps
+        run: |
+          python - << 'PY'
+          import PyQt6, qasync, pandas, openpyxl, sys, platform
+          print('Deps OK on', platform.system(), 'Python', sys.version)
+          print('PyQt version:', PyQt6.QtCore.QT_VERSION_STR)
+          PY
+
+      - name: Build application with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed \
+            --name AvitoSellerParser \
+            --distpath dist \
+            --workpath build \
+            --specpath . \
+            --hidden-import PyQt6 \
+            --hidden-import qasync \
+            src/gui.py
+        shell: bash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvitoSellerParser-${{ matrix.os }}
+          path: |
+            dist/*
+          retention-days: 30
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.os }}
+          path: |
+            build/
+            *.spec
+          retention-days: 7
