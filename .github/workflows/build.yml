@@ -50,6 +50,8 @@ jobs:
             --specpath . \
             --hidden-import PyQt6 \
             --hidden-import qasync \
+            --hidden-import src.parser \
+            --hidden-import parser \
             src/gui.py
         shell: bash
 

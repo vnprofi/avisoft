@@ -20,19 +20,23 @@ from PyQt6.QtWidgets import (
 
 # Import parser module regardless of execution context (package / script / PyInstaller)
 try:
-    # When running via "python -m src.gui" or as part of a package
+    # 1. Running inside package "src"
     from . import parser as avito_parser  # type: ignore
-except ImportError:  # running as plain script or bundled by PyInstaller
-    import os
-    import sys
-    from pathlib import Path
+except ImportError:
+    try:
+        # 2. Running from project root (e.g. "python src/gui.py") or bundled exe
+        import src.parser as avito_parser  # type: ignore
+    except ImportError:
+        # 3. Fallback: ensure current directory on sys.path then import by module name
+        import sys
+        import os
+        from pathlib import Path
 
-    # Ensure directory containing this file is on sys.path
-    current_dir = Path(__file__).resolve().parent
-    if str(current_dir) not in sys.path:
-        sys.path.insert(0, str(current_dir))
+        current_dir = Path(__file__).resolve().parent
+        if str(current_dir) not in sys.path:
+            sys.path.insert(0, str(current_dir))
 
-    import parser as avito_parser  # type: ignore
+        import parser as avito_parser  # type: ignore
 
 
 class ParserThread(QThread):
