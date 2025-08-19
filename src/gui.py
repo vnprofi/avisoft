@@ -18,7 +18,11 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 
-from . import parser as avito_parser
+# Fallback for direct execution
+try:
+    from . import parser as avito_parser  # type: ignore
+except ImportError:
+    import parser as avito_parser  # type: ignore
 
 
 class ParserThread(QThread):
