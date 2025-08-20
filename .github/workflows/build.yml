@@ -30,8 +30,9 @@ jobs:
           python -m pip install --no-input --upgrade pyinstaller
 
       - name: Install Python dependencies
+        shell: bash
         run: |
-          pip install --no-cache-dir -r requirements.txt
+          python -m pip install --no-input --no-cache-dir -r requirements.txt
 
       - name: Install Playwright browsers
         run: |
