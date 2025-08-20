@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import sys
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.building.datastruct import Tree
 
@@ -15,10 +16,10 @@ try:
 except Exception:
     pass
 
-
 # Datas will be added after Analysis using Tree() to avoid tuple unpack errors
 datas = []
 
+IS_MAC = sys.platform == 'darwin'
 
 a = Analysis(
     ['app.py'],
@@ -60,6 +61,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=None,
-    onefile=True,
+    onefile=not IS_MAC,
 )
 
