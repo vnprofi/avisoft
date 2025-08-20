@@ -92,35 +92,26 @@ def _get_next_page_url(current_url: str, page_number: int) -> str:
 
 
 def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
-    """Парсит объявления продавца, прокручивая страницу через Playwright."""
-    all_products: List[Dict] = []
-    seller_info: Dict = {}
+    """Парсит объявления продавца за один проход: открывает страницу,
+    скроллит до конца и возвращает все найденные объявления.
 
-    for page in range(1, max_pages + 1):
-        page_url = listing_url if page == 1 else _get_next_page_url(listing_url, page)
+    Параметр max_pages сохранён для обратной совместимости, но не используется.
+    """
+    try:
+        html_text = _fetch_html_playwright(listing_url)
+    except Exception as e:
+        # Пробрасываем исключение, чтобы GUI показал ошибку
+        raise
 
-        try:
-            html_text = _fetch_html_playwright(page_url)
-        except Exception:
-            # Если Playwright не смог, прекращаем
-            break
+    parsed = _parse_listing_page(html_text)
+    all_products: List[Dict] = parsed.get("products", [])
+    seller_info: Dict = parsed.get("seller_info", {})
 
-        parsed = _parse_listing_page(html_text)
-
-        if page == 1:
-            seller_info = parsed["seller_info"]
-
-        products = parsed["products"]
-        if not products:
-            break
-
-        all_products.extend(products)
-
-        # Avito обычно показывает не более 50 объявлений на страницу.
-        if len(products) < 50:
-            break
-
-    return {"total_products": len(all_products), "products": all_products, "seller_info": seller_info}
+    return {
+        "total_products": len(all_products),
+        "products": all_products,
+        "seller_info": seller_info,
+    }
 
 
 # ------------------ Playwright helper ------------------
