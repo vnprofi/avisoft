@@ -34,7 +34,8 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          python -m playwright install chromium
+          # Скачиваем движок Chromium прямо в каталог проекта
+          PLAYWRIGHT_BROWSERS_PATH=ms-playwright python -m playwright install chromium
 
       - name: Verify deps
         shell: bash
@@ -57,6 +58,7 @@ jobs:
             --hidden-import src.parser \
             --hidden-import parser \
             --hidden-import playwright.sync_api \
+            --add-data "ms-playwright;ms-playwright" \
             src/gui.py
         shell: bash
 

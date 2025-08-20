@@ -8,8 +8,14 @@ import os
 from typing import List, Dict
 import subprocess
 import sys
+from pathlib import Path
 
 BASE_URL = "https://www.avito.ru"
+
+# If running from PyInstaller bundle, point Playwright to embedded browsers
+if getattr(sys, "_MEIPASS", None):
+    embedded_dir = Path(sys._MEIPASS) / "ms-playwright"
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(embedded_dir)
 
 
 def _clean_text(text: str) -> str:
@@ -167,15 +173,11 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
 
 def _ensure_browsers_installed():
     """Check if Playwright browsers are installed; if not, install chromium."""
-    from pathlib import Path
-    import importlib.util
-
-    # Playwright uses env var or defaults to user cache dir .ms-playwright
-    # Quick heuristic: look for .ms-playwright inside home with for Chromium
-    home = Path.home()
-    browsers_dir = home / ".ms-playwright" / "chromium"
-    if browsers_dir.exists():
-        return
+    # If embedded via PyInstaller and env var points to it – nothing to do
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        pth = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
+        if pth.exists():
+            return
     try:
         print("Installing Playwright chromium browsers, please wait…")
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
