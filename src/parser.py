@@ -1,11 +1,13 @@
 import requests
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 import csv
 import os
 from typing import List, Dict
+import subprocess
+import sys
 
 BASE_URL = "https://www.avito.ru"
 
@@ -120,6 +122,7 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
 
 def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = False) -> str:
     """Load page with Playwright, fast-scroll until all items rendered and return HTML."""
+    _ensure_browsers_installed()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
@@ -160,6 +163,24 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
         # Only scrolling—no extra clicks on "expand" links
         browser.close()
         return html
+
+
+def _ensure_browsers_installed():
+    """Check if Playwright browsers are installed; if not, install chromium."""
+    from pathlib import Path
+    import importlib.util
+
+    # Playwright uses env var or defaults to user cache dir .ms-playwright
+    # Quick heuristic: look for .ms-playwright inside home with for Chromium
+    home = Path.home()
+    browsers_dir = home / ".ms-playwright" / "chromium"
+    if browsers_dir.exists():
+        return
+    try:
+        print("Installing Playwright chromium browsers, please wait…")
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        print("Failed to install Playwright browsers:", e)
 
 
 def save_to_csv(data: Dict, filename: str):
