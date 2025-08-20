@@ -2,12 +2,15 @@ name: Build Avito Seller Parser
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
         python-version: ["3.11"]
@@ -26,58 +29,96 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --no-input --upgrade --upgrade-strategy eager setuptools wheel
-          python -m pip install --no-input --upgrade pyinstaller
+          python -m pip install --upgrade setuptools wheel
 
       - name: Install Python dependencies
         shell: bash
         run: |
-          python -m pip install --no-input --no-cache-dir -r requirements.txt
+          python -m pip install --no-cache-dir -r requirements.txt
 
       - name: Install Playwright browsers
+        shell: bash
         run: |
           # Скачиваем движок Chromium прямо в каталог проекта
-          PLAYWRIGHT_BROWSERS_PATH=ms-playwright python -m playwright install chromium
+          export PLAYWRIGHT_BROWSERS_PATH=ms-playwright
+          python -m playwright install chromium
+          ls -la ms-playwright/ || echo "Browser directory not found"
 
-      - name: Verify deps
+      - name: Verify dependencies
         shell: bash
         run: |
-          python - << 'PY'
-          import PyQt6, qasync, pandas, openpyxl, sys, platform
-          print('Deps OK on', platform.system(), 'Python', sys.version)
+          python -c "
+          import PyQt6, qasync, pandas, openpyxl, sys, platform, playwright
+          print('Dependencies OK on', platform.system(), 'Python', sys.version)
           print('PyQt version:', PyQt6.QtCore.QT_VERSION_STR)
-          PY
+          print('Playwright version:', playwright.__version__)
+          "
 
-      - name: Build application with PyInstaller
-        run: |
-          pyinstaller --onefile --windowed \
-            --name AvitoSellerParser \
-            --distpath dist \
-            --workpath build \
-            --specpath . \
-            --hidden-import PyQt6 \
-            --hidden-import qasync \
-            --hidden-import src.parser \
-            --hidden-import parser \
-            --hidden-import playwright.sync_api \
-            --add-data "ms-playwright;ms-playwright" \
-            src/gui.py
+      - name: Test application import
         shell: bash
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'src')
+          try:
+              import gui, parser
+              print('Modules imported successfully')
+          except Exception as e:
+              print('Import error:', e)
+              raise
+          "
+
+      - name: Build application with PyInstaller (using spec file)
+        shell: bash
+        run: |
+          pyinstaller AvitoSellerParser.spec --clean --noconfirm
+          ls -la dist/
+
+      - name: Test built executable (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          if [ -f "dist/AvitoSellerParser.exe" ]; then
+            echo "✅ Windows executable built successfully"
+            file dist/AvitoSellerParser.exe || echo "File command not available"
+          else
+            echo "❌ Windows executable not found"
+            ls -la dist/
+            exit 1
+          fi
+
+      - name: Test built executable (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [ -f "dist/AvitoSellerParser" ]; then
+            echo "✅ macOS executable built successfully"
+            file dist/AvitoSellerParser
+            chmod +x dist/AvitoSellerParser
+          elif [ -d "dist/AvitoSellerParser.app" ]; then
+            echo "✅ macOS app bundle built successfully"
+            ls -la dist/AvitoSellerParser.app/Contents/MacOS/
+          else
+            echo "❌ macOS executable not found"
+            ls -la dist/
+            exit 1
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AvitoSellerParser-${{ matrix.os }}
+          name: AvitoSellerParser-${{ matrix.os }}-py${{ matrix.python-version }}
           path: |
-            dist/*
+            dist/
           retention-days: 30
 
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-${{ matrix.os }}
+          name: build-logs-${{ matrix.os }}-py${{ matrix.python-version }}
           path: |
             build/
             *.spec
+            ms-playwright/
           retention-days: 7

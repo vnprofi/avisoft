@@ -27,16 +27,27 @@ except ImportError:
         # 2. Running from project root (e.g. "python src/gui.py") or bundled exe
         import src.parser as avito_parser  # type: ignore
     except ImportError:
-        # 3. Fallback: ensure current directory on sys.path then import by module name
-        import sys
-        import os
-        from pathlib import Path
+        try:
+            # 3. PyInstaller bundled executable
+            import parser as avito_parser  # type: ignore
+        except ImportError:
+            # 4. Fallback: ensure current directory on sys.path then import by module name
+            import sys
+            import os
+            from pathlib import Path
 
-        current_dir = Path(__file__).resolve().parent
-        if str(current_dir) not in sys.path:
-            sys.path.insert(0, str(current_dir))
+            current_dir = Path(__file__).resolve().parent
+            if str(current_dir) not in sys.path:
+                sys.path.insert(0, str(current_dir))
 
-        import parser as avito_parser  # type: ignore
+            try:
+                import parser as avito_parser  # type: ignore
+            except ImportError:
+                # Last resort - try to import from parent directory
+                parent_dir = current_dir.parent
+                if str(parent_dir) not in sys.path:
+                    sys.path.insert(0, str(parent_dir))
+                import src.parser as avito_parser  # type: ignore
 
 
 class ParserThread(QThread):

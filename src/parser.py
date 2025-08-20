@@ -126,49 +126,64 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
 # ------------------ Playwright helper ------------------
 
 
-def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = False) -> str:
+def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = True) -> str:
     """Load page with Playwright, fast-scroll until all items rendered and return HTML."""
     _ensure_browsers_installed()
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-            locale="ru-RU",
-            timezone_id="Europe/Moscow",
-        )
-        page = context.new_page()
-        # Avoid detection
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+    try:
+        with sync_playwright() as p:
+            try:
+                browser = p.chromium.launch(headless=headless)
+            except Exception as e:
+                print(f"Ошибка запуска браузера: {e}")
+                raise PlaywrightError(f"Не удалось запустить браузер Chromium: {e}")
+            
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+                locale="ru-RU",
+                timezone_id="Europe/Moscow",
+            )
+            page = context.new_page()
+            
+            # Avoid detection
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
-        page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
+            try:
+                page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                page.wait_for_timeout(4000)
+            except Exception as e:
+                print(f"Ошибка загрузки страницы: {e}")
+                browser.close()
+                raise PlaywrightError(f"Не удалось загрузить страницу: {e}")
 
-        scroll_attempts = 0
-        while scroll_attempts < max_scroll_attempts:
-            current_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+            scroll_attempts = 0
+            while scroll_attempts < max_scroll_attempts:
+                try:
+                    current_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(int(scroll_pause * 1000))
+                    new_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(int(scroll_pause * 1000))
+                    if new_items == current_items:
+                        scroll_attempts += 1
+                    else:
+                        scroll_attempts = 0
 
-            new_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+                    print(f"Загружено товаров: {new_items}")
 
-            if new_items == current_items:
-                scroll_attempts += 1
-            else:
-                scroll_attempts = 0
+                    if scroll_attempts >= 3:
+                        break
+                except Exception as e:
+                    print(f"Ошибка во время скроллинга: {e}")
+                    break
 
-            # Optional: debug output
-            # print(f"Loaded items: {new_items}")
-
-            if scroll_attempts >= 3:
-                break
-
-        html = page.content()
-
-        # Only scrolling—no extra clicks on "expand" links
-        browser.close()
-        return html
+            html = page.content()
+            browser.close()
+            return html
+            
+    except Exception as e:
+        print(f"Критическая ошибка Playwright: {e}")
+        raise PlaywrightError(f"Playwright не смог обработать страницу: {e}")
 
 
 def _ensure_browsers_installed():
