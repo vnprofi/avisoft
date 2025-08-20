@@ -152,20 +152,7 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
 
         html = page.content()
 
-        # Попытка раскрыть скрытые описания объявлений
-        try:
-            expand_links = page.query_selector_all('a[data-marker="expand-text"]')
-            for link in expand_links:
-                try:
-                    link.click()
-                    time.sleep(0.3)
-                except Exception:
-                    pass
-            # обновить html после кликов
-            html = page.content()
-        except Exception:
-            pass
-
+        # Только скроллинг – без дополнительных кликов «Показать ещё»
         browser.close()
         return html
 
