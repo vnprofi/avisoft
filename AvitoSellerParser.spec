@@ -44,8 +44,10 @@ if os.path.isdir('ms-playwright'):
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='AvitoSellerParser',
     debug=False,
     bootloader_ignore_signals=False,
