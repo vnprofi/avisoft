@@ -14,16 +14,10 @@ try:
     hiddenimports += collect_submodules('playwright')
 except Exception:
     pass
-try:
-    hiddenimports += collect_submodules('bs4')
-except Exception:
-    pass
 
 
-# Include Playwright browsers folder if it was installed in the repo root
+# Datas will be added after Analysis using Tree() to avoid tuple unpack errors
 datas = []
-if os.path.isdir('ms-playwright'):
-    datas += Tree('ms-playwright', prefix='ms-playwright')
 
 
 a = Analysis(
@@ -42,6 +36,10 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+
+# Include Playwright browsers folder (if present) into the bundle contents
+if os.path.isdir('ms-playwright'):
+    a.datas += Tree('ms-playwright', prefix='ms-playwright')
 
 exe = EXE(
     pyz,
