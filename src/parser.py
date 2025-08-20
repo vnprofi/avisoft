@@ -126,7 +126,7 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
 # ------------------ Playwright helper ------------------
 
 
-def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = True) -> str:
+def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = False) -> str:
     """Load page with Playwright, fast-scroll until all items rendered and return HTML."""
     _ensure_browsers_installed()
     try:

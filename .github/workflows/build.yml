@@ -51,7 +51,10 @@ jobs:
           import PyQt6, qasync, pandas, openpyxl, sys, platform, playwright
           print('Dependencies OK on', platform.system(), 'Python', sys.version)
           print('PyQt version:', PyQt6.QtCore.QT_VERSION_STR)
-          print('Playwright version:', playwright.__version__)
+          try:
+              print('Playwright version:', playwright.__version__)
+          except AttributeError:
+              print('Playwright installed (version check not available)')
           "
 
       - name: Test application import
