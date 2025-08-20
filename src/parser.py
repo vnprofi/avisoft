@@ -118,10 +118,10 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
 # ------------------ Playwright helper ------------------
 
 
-def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 30) -> str:
-    """Load page in Playwright, scroll to bottom to load items, return HTML."""
+def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = True) -> str:
+    """Load page with Playwright, fast-scroll until all items rendered and return HTML."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
@@ -133,26 +133,31 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        time.sleep(2)
+        page.wait_for_timeout(3000)
 
         scroll_attempts = 0
-        last_items = 0
-
         while scroll_attempts < max_scroll_attempts:
+            current_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(scroll_pause)
+            page.wait_for_timeout(int(scroll_pause * 1000))
+
             new_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
-            if new_items == last_items:
+
+            if new_items == current_items:
                 scroll_attempts += 1
             else:
                 scroll_attempts = 0
-                last_items = new_items
+
+            # Optional: debug output
+            # print(f"Loaded items: {new_items}")
+
             if scroll_attempts >= 3:
                 break
 
         html = page.content()
 
-        # Только скроллинг – без дополнительных кликов «Показать ещё»
+        # Only scrolling—no extra clicks on "expand" links
         browser.close()
         return html
 
