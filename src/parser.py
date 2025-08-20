@@ -84,40 +84,34 @@ def _get_next_page_url(current_url: str, page_number: int) -> str:
 
 
 def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
-    """Return dict with keys: total_products, products (list), seller_info"""
-    session = requests.Session()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Accept-Language": "ru-RU,ru;q=0.9",
-    }
-    all_products = []
-    seller_info = {}
+    """Парсит объявления продавца, прокручивая страницу через Playwright."""
+    all_products: List[Dict] = []
+    seller_info: Dict = {}
 
     for page in range(1, max_pages + 1):
-        url = listing_url if page == 1 else _get_next_page_url(listing_url, page)
-        resp = session.get(url, headers=headers, timeout=30)
-        html_text = resp.text if resp.status_code == 200 else ""
+        page_url = listing_url if page == 1 else _get_next_page_url(listing_url, page)
+
+        try:
+            html_text = _fetch_html_playwright(page_url)
+        except Exception:
+            # Если Playwright не смог, прекращаем
+            break
 
         parsed = _parse_listing_page(html_text)
 
-        # If no products extracted from requests, try Playwright for this page
-        if not parsed["products"]:
-            try:
-                html_text = _fetch_html_playwright(url)
-                parsed = _parse_listing_page(html_text)
-            except Exception:
-                # Playwright may fail in headless environment; keep empty
-                pass
-        # On first page get seller info
         if page == 1:
             seller_info = parsed["seller_info"]
+
         products = parsed["products"]
         if not products:
             break
+
         all_products.extend(products)
-        # Heuristic: if less than 50 items found -> assume no more pages
+
+        # Avito обычно показывает не более 50 объявлений на страницу.
         if len(products) < 50:
             break
+
     return {"total_products": len(all_products), "products": all_products, "seller_info": seller_info}
 
 
@@ -157,6 +151,21 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
                 break
 
         html = page.content()
+
+        # Попытка раскрыть скрытые описания объявлений
+        try:
+            expand_links = page.query_selector_all('a[data-marker="expand-text"]')
+            for link in expand_links:
+                try:
+                    link.click()
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+            # обновить html после кликов
+            html = page.content()
+        except Exception:
+            pass
+
         browser.close()
         return html
 
