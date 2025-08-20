@@ -118,7 +118,7 @@ def fetch_products_for_seller(listing_url: str, max_pages: int = 10) -> Dict:
 # ------------------ Playwright helper ------------------
 
 
-def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = True) -> str:
+def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attempts: int = 50, headless: bool = False) -> str:
     """Load page with Playwright, fast-scroll until all items rendered and return HTML."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
@@ -133,7 +133,7 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(4000)
 
         scroll_attempts = 0
         while scroll_attempts < max_scroll_attempts:
