@@ -173,30 +173,6 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
                     if current_items == prev_items and current_height == prev_height:
                         stable_cycles += 1
 
-                        # Try clicking a generic "show more" button if present
-                        try:
-                            clicked_more = page.evaluate(
-                                """
-                                (() => {
-                                  const buttons = Array.from(document.querySelectorAll('button, a'));
-                                  const re = /(Показать\s*(ещё|еще|больше)|Show\s*more)/i;
-                                  const el = buttons.find(b => re.test(b.textContent || ''));
-                                  if (el) { el.click(); return true; }
-                                  return false;
-                                })()
-                                """
-                            )
-                        except Exception:
-                            clicked_more = False
-
-                        if clicked_more:
-                            # Give content a moment to load and continue
-                            page.wait_for_timeout(800)
-                            stable_cycles = 0
-                            prev_items = -1
-                            prev_height = -1
-                            continue
-
                         if stable_cycles >= stable_cycles_required:
                             # Small grace period to let any pending data finish
                             try:
