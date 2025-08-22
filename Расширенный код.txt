@@ -1,0 +1,421 @@
+from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+import csv
+import re
+import time
+import random
+
+BASE_URL = "https://www.avito.ru"
+
+# Ротация User-Agent (только десктопные)
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+]
+
+
+def get_random_headers():
+    """Генерирует случайные заголовки"""
+    return {
+        "X-Forwarded-For": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+        "X-Real-IP": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+        "CF-Connecting-IP": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
+    }
+
+
+def create_browser_context(playwright_instance):
+    """Создает контекст браузера с антибан настройками"""
+    browser = playwright_instance.chromium.launch(
+        headless=False,
+        args=[
+            '--disable-blink-features=AutomationControlled',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor',
+            '--no-sandbox',
+            '--disable-dev-shm-usage'
+        ]
+    )
+    context = browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        user_agent=random.choice(USER_AGENTS),
+        locale="ru-RU",
+        timezone_id="Europe/Moscow",
+        extra_http_headers=get_random_headers(),
+        java_script_enabled=True,
+        bypass_csp=True,
+        ignore_https_errors=True
+    )
+
+    page = context.new_page()
+    page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru', 'en-US', 'en']});
+        window.chrome = { runtime: {} };
+    """)
+
+    return browser, context, page
+
+
+def extract_seller_products(url):
+    """Загружает страницу и возвращает распарсенные данные"""
+    with sync_playwright() as p:
+        browser, context, page = create_browser_context(p)
+
+        try:
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+
+            scroll_attempts = 0
+            max_attempts = 50
+
+            while scroll_attempts < max_attempts:
+                current_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(500)
+                new_items = len(page.query_selector_all('[data-marker="item"], div[class*="iva-item-root"]'))
+
+                if new_items == current_items:
+                    scroll_attempts += 1
+                else:
+                    scroll_attempts = 0
+
+                print(f"Загружено товаров: {new_items}")
+
+                if scroll_attempts >= 3:
+                    break
+
+            try:
+                expand_links = page.query_selector_all('a[data-marker="expand-text"]')
+                for link in expand_links:
+                    try:
+                        link.click()
+                        page.wait_for_timeout(500)
+                    except:
+                        pass
+            except:
+                pass
+
+            html = page.content()
+        finally:
+            browser.close()
+
+    return extract_from_html(html)
+
+
+def extract_product_details(page, url):
+    """Извлекает детальную информацию из карточки товара используя существующую страницу"""
+    try:
+        # Меняем User-Agent для каждого запроса
+        page.context.add_init_script(
+            f"Object.defineProperty(navigator, 'userAgent', {{get: () => '{random.choice(USER_AGENTS)}'}});")
+
+        page.goto(url, timeout=60000, wait_until="networkidle")
+        page.wait_for_timeout(random.randint(3000, 6000))  # Увеличенная пауза для полной загрузки
+
+        # Ждем загрузки основных элементов
+        try:
+            page.wait_for_selector('body', timeout=10000)
+            page.wait_for_load_state('domcontentloaded')
+            page.wait_for_load_state('networkidle')
+        except:
+            pass
+
+        # Принудительный скроллинг с несколькими попытками
+        try:
+            # Метод 1: Скролл через JavaScript
+            for i in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+
+            # Метод 2: Скролл клавишей Page Down
+            page.keyboard.press("End")
+            page.wait_for_timeout(1000)
+
+            # Метод 3: Скролл по пикселям
+            page.evaluate("window.scrollBy(0, 3000)")
+            page.wait_for_timeout(1000)
+
+        except:
+            pass
+
+        # Пытаемся раскрыть прайс-лист если есть кнопка
+        try:
+            price_list_buttons = page.query_selector_all('div._o8T3[data-marker*="PRICE_LIST_TITLE_MARKER"]')
+            for button in price_list_buttons:
+                try:
+                    button.click()
+                    page.wait_for_timeout(1000)
+                except:
+                    pass
+        except:
+            pass
+
+        html = page.content()
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Извлекаем расположение из блока F3kIg
+        location_detail = ""
+        desc_blocks = soup.select('div.F3kIg')
+        for block in desc_blocks:
+            h2 = block.find('h2', class_='EEPdn')
+            if h2 and 'Расположение' in h2.get_text():
+                location_div = block.find('div', class_='ljYEJ')
+                if location_div:
+                    location_detail = clean_text(location_div)
+                break
+
+        # Извлекаем подробности
+        details = ""
+        details_block = soup.select_one('div.cK39j.gYppE.aoCbM div#bx_item-params')
+        if details_block:
+            details = clean_text(details_block)
+
+        # Извлекаем прайс-лист
+        price_list = ""
+        price_block = soup.select_one('div.gVNL7')
+        if price_block:
+            price_list = clean_text(price_block)
+
+        # Извлекаем описание
+        description = ""
+        desc_block = soup.select_one('div.cK39j.PqCav.aoCbM div#bx_item-description')
+        if desc_block:
+            description = clean_text(desc_block)
+
+        # Извлекаем дополнительно (образование, курсы)
+        additional = ""
+        edu_block = soup.select_one('div.UaGSK div[data-marker="service-education/title"]')
+        if edu_block:
+            # Ищем родительский контейнер для получения всего содержимого
+            parent_block = edu_block.find_parent('div', class_='UaGSK')
+            if parent_block:
+                additional = clean_text(parent_block)
+
+        return {
+            "location_detail": location_detail,
+            "details": details,
+            "price_list": price_list,
+            "description": description,
+            "additional": additional
+        }
+
+    except Exception as e:
+        print(f"Ошибка при парсинге карточки {url}: {e}")
+        return {
+            "location_detail": "",
+            "details": "",
+            "price_list": "",
+            "description": "",
+            "additional": ""
+        }
+
+
+def extract_from_html(html_content: str):
+    """Парсит страницу и собирает товары + инфо о продавце"""
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    products = []
+    item_cards = soup.select('[data-marker="item"], div[class*="iva-item-root"]')
+
+    for i, card in enumerate(item_cards, start=1):
+        title_a = card.select_one('a[data-marker="item-title"]')
+        if not title_a:
+            continue
+
+        name = title_a.get_text(strip=True)
+        href = title_a.get("href", "")
+        url = urljoin(BASE_URL, href)
+
+        price_value = extract_price(card)
+        location_value = extract_location(card)
+        date_value = extract_date(card)
+
+        products.append({
+            "index": i,
+            "name": name,
+            "url": url,
+            "title": title_a.get("title", ""),
+            "price": price_value,
+            "location": location_value,
+            "date": date_value,
+        })
+
+    seller_info = extract_seller_info(soup)
+
+    return {
+        "total_products": len(products),
+        "products": products,
+        "seller_info": seller_info,
+    }
+
+
+def clean_text(node) -> str:
+    if not node:
+        return ""
+    for svg in node.find_all("svg"):
+        svg.decompose()
+    return " ".join(node.stripped_strings).replace("\xa0", " ").strip()
+
+
+def extract_price(container) -> str:
+    if not container:
+        return ""
+
+    meta_price = container.select_one('meta[itemprop="price"]')
+    if meta_price and meta_price.get("content"):
+        return meta_price["content"].strip()
+
+    price_p = container.select_one('p[data-marker="item-price"]')
+    if price_p:
+        return clean_text(price_p)
+
+    txt = clean_text(container)
+    m = re.search(r"\d[\d\s]*₽", txt)
+    if m:
+        return m.group(0).strip()
+
+    return ""
+
+
+def extract_location(container) -> str:
+    if not container:
+        return ""
+
+    geo = container.select_one('div[class*="geo-root"]')
+    if geo:
+        return clean_text(geo)
+
+    return ""
+
+
+def extract_date(container) -> str:
+    """Извлекает дату размещения объявления"""
+    if not container:
+        return ""
+    date_p = container.select_one('p[data-marker="item-date"]')
+    if date_p:
+        return clean_text(date_p)
+    return ""
+
+
+def extract_seller_info(soup):
+    """Извлекает информацию о продавце"""
+    seller_info = {
+        "name": "",
+        "rating": "",
+    }
+
+    name_wrap = soup.find("div", class_=re.compile(r"AvatarNameView-name"))
+    if name_wrap:
+        h1 = name_wrap.find(["h1", "h2"])
+        if h1:
+            seller_info["name"] = h1.get_text(strip=True)
+
+    rating_el = soup.find("span", {"data-marker": "profile/score"})
+    if rating_el:
+        seller_info["rating"] = rating_el.get_text(strip=True)
+
+    return seller_info
+
+
+def save_to_csv(data, filename="avito_products.csv", detailed=False):
+    if not data.get("products"):
+        print("Нет данных для сохранения")
+        return
+
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        if detailed:
+            fieldnames = [
+                "index", "name", "url", "title", "price", "location", "date",
+                "location_detail", "details", "price_list", "description", "additional", "seller_name", "seller_rating",
+            ]
+        else:
+            fieldnames = [
+                "index", "name", "url", "title", "price", "location", "date",
+                "seller_name", "seller_rating",
+            ]
+
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        s = data.get("seller_info", {}) or {}
+        for row in data["products"]:
+            row_out = dict(row)
+            row_out.update({
+                "seller_name": s.get("name", ""),
+                "seller_rating": s.get("rating", ""),
+            })
+            writer.writerow(row_out)
+
+    print(f"Данные сохранены в {filename}")
+
+
+def main():
+    url = "https://www.avito.ru/brands/8cbf4e5db1a75081a8fc4518d305c371/items?s=profile_search_show_all"
+
+    print("Начинаем парсинг товаров…")
+    result = extract_seller_products(url)
+
+    print("\nИнформация о продавце:")
+    for k, v in result.get("seller_info", {}).items():
+        print(f"{k}: {v}")
+
+    print(f"\nНайдено товаров: {result['total_products']}")
+    for product in result["products"]:
+        print(
+            f"\n{product['index']}. {product['name']}\n"
+            f"Цена: {product['price']}\n"
+            f"Локация: {product['location']}\n"
+            f"Дата: {product['date']}\n"
+            f"URL: {product['url']}\n"
+            f"Title: {product['title']}\n"
+            + "-" * 50
+        )
+
+    while True:
+        choice = input("\nСобирать данные из карточки каждого объявления? (да/нет): ").strip().lower()
+        if choice in ['да', 'yes', 'y', 'д']:
+            print("Начинаем сбор детальной информации из карточек...")
+
+            # Создаем один браузер для всех карточек
+            with sync_playwright() as p:
+                browser, context, page = create_browser_context(p)
+
+                try:
+                    for i, product in enumerate(result["products"], 1):
+                        print(f"Обрабатываем карточку {i}/{len(result['products'])}: {product['name']}")
+
+                        details = extract_product_details(page, product["url"])
+                        product["location_detail"] = details["location_detail"]
+                        product["details"] = details["details"]
+                        product["price_list"] = details["price_list"]
+                        product["description"] = details["description"]
+                        product["additional"] = details["additional"]
+
+                        # Случайная пауза между запросами
+                        time.sleep(random.uniform(3, 7))
+
+                finally:
+                    browser.close()
+
+            save_to_csv(result, detailed=True)
+            print("Сбор детальной информации завершен!")
+            break
+
+        elif choice in ['нет', 'no', 'n', 'н']:
+            save_to_csv(result, detailed=False)
+            print("Работа завершена!")
+            break
+
+        else:
+            print("Пожалуйста, введите 'да' или 'нет'")
+
+
+if __name__ == "__main__":
+    main()

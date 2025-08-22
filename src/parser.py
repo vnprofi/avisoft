@@ -9,6 +9,7 @@ from typing import List, Dict
 import subprocess
 import sys
 from pathlib import Path
+import random
 
 BASE_URL = "https://www.avito.ru"
 
@@ -17,11 +18,76 @@ if getattr(sys, "_MEIPASS", None):
     embedded_dir = Path(sys._MEIPASS) / "ms-playwright"
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(embedded_dir)
 
+# ------------------ Anti-blocking helpers ------------------
+
+# Rotating desktop User-Agents
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+]
+
+
+def _get_random_headers() -> Dict[str, str]:
+    return {
+        "X-Forwarded-For": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+        "X-Real-IP": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+        "CF-Connecting-IP": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+    }
+
+
+def _create_browser_context(playwright_instance, headless: bool = False):
+    """Create Chromium browser/context/page with anti-detection settings."""
+    browser = playwright_instance.chromium.launch(
+        headless=headless,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-web-security",
+            "--disable-features=VizDisplayCompositor",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ],
+    )
+    context = browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        user_agent=random.choice(USER_AGENTS),
+        locale="ru-RU",
+        timezone_id="Europe/Moscow",
+        extra_http_headers=_get_random_headers(),
+        java_script_enabled=True,
+        bypass_csp=True,
+        ignore_https_errors=True,
+    )
+    page = context.new_page()
+    page.add_init_script(
+        """
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU','ru','en-US','en']});
+        window.chrome = { runtime: {} };
+        """
+    )
+    return browser, context, page
+
+
+# ------------------ Parsing helpers ------------------
+
 
 def _clean_text(text: str) -> str:
     if not text:
         return ""
     return " ".join(text.split()).replace("\xa0", " ")
+
+
+def _clean_node_text(node) -> str:
+    if not node:
+        return ""
+    for svg in node.find_all("svg"):
+        svg.decompose()
+    return " ".join(node.stripped_strings).replace("\xa0", " ").strip()
 
 
 def _extract_price(card) -> str:
@@ -127,21 +193,10 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
     try:
         with sync_playwright() as p:
             try:
-                browser = p.chromium.launch(headless=headless)
+                browser, context, page = _create_browser_context(p, headless=headless)
             except Exception as e:
                 print(f"Ошибка запуска браузера: {e}")
                 raise PlaywrightError(f"Не удалось запустить браузер Chromium: {e}")
-
-            context = browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-                locale="ru-RU",
-                timezone_id="Europe/Moscow",
-            )
-            page = context.new_page()
-
-            # Avoid detection
-            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
             try:
                 page.goto(url, timeout=60000, wait_until="domcontentloaded")
@@ -220,28 +275,181 @@ def _ensure_browsers_installed():
         print("Failed to install Playwright browsers:", e)
 
 
+# ------------------ Details scraping ------------------
+
+
+def extract_product_details(page, url: str) -> Dict:
+    """Extract detailed info from a product card using an existing Playwright page."""
+    try:
+        # Randomize UA per request
+        try:
+            page.context.add_init_script(
+                f"Object.defineProperty(navigator, 'userAgent', {{get: () => '{random.choice(USER_AGENTS)}'}});"
+            )
+        except Exception:
+            pass
+
+        page.goto(url, timeout=60000, wait_until="networkidle")
+        page.wait_for_timeout(random.randint(3000, 6000))
+
+        # Wait for basic readiness
+        try:
+            page.wait_for_selector("body", timeout=10000)
+            page.wait_for_load_state("domcontentloaded")
+            page.wait_for_load_state("networkidle")
+        except Exception:
+            pass
+
+        # Forced scrolling in several ways
+        try:
+            for _ in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+            page.keyboard.press("End")
+            page.wait_for_timeout(1000)
+            page.evaluate("window.scrollBy(0, 3000)")
+            page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # Try expand price list if present
+        try:
+            price_list_buttons = page.query_selector_all('div._o8T3[data-marker*="PRICE_LIST_TITLE_MARKER"]')
+            for button in price_list_buttons:
+                try:
+                    button.click()
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        html = page.content()
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Location details
+        location_detail = ""
+        desc_blocks = soup.select('div.F3kIg')
+        for block in desc_blocks:
+            h2 = block.find('h2', class_='EEPdn')
+            if h2 and 'Расположение' in h2.get_text():
+                location_div = block.find('div', class_='ljYEJ')
+                if location_div:
+                    location_detail = _clean_node_text(location_div)
+                break
+
+        # Details
+        details = ""
+        details_block = soup.select_one('div.cK39j.gYppE.aoCbM div#bx_item-params')
+        if details_block:
+            details = _clean_node_text(details_block)
+
+        # Price list
+        price_list = ""
+        price_block = soup.select_one('div.gVNL7')
+        if price_block:
+            price_list = _clean_node_text(price_block)
+
+        # Description
+        description = ""
+        desc_block = soup.select_one('div.cK39j.PqCav.aoCbM div#bx_item-description')
+        if desc_block:
+            description = _clean_node_text(desc_block)
+
+        # Additional
+        additional = ""
+        edu_block = soup.select_one('div.UaGSK div[data-marker="service-education/title"]')
+        if edu_block:
+            parent_block = edu_block.find_parent('div', class_='UaGSK')
+            if parent_block:
+                additional = _clean_node_text(parent_block)
+
+        return {
+            "location_detail": location_detail,
+            "details": details,
+            "price_list": price_list,
+            "description": description,
+            "additional": additional,
+        }
+    except Exception as e:
+        print(f"Ошибка при парсинге карточки {url}: {e}")
+        return {
+            "location_detail": "",
+            "details": "",
+            "price_list": "",
+            "description": "",
+            "additional": "",
+        }
+
+
+def collect_details_for_products(products: List[Dict]):
+    """Augment each product dict with detailed fields by visiting item pages.
+    Uses a single browser session for efficiency.
+    """
+    if not products:
+        return
+    with sync_playwright() as p:
+        browser, context, page = _create_browser_context(p, headless=False)
+        try:
+            for product in products:
+                details = extract_product_details(page, product.get("url", ""))
+                product.update(details)
+                time.sleep(random.uniform(3, 7))
+        finally:
+            browser.close()
+
+
+# ------------------ CSV output ------------------
+
+
 def save_to_csv(data: Dict, filename: str):
-    """Save parsed data to CSV file"""
+    """Save parsed data to CSV file. If detailed fields are present, include them."""
     if not data or not data.get("products"):
         raise ValueError("No product data to save")
 
     os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
-    fieldnames = [
-        "index",
-        "name",
-        "url",
-        "title",
-        "price",
-        "location",
-        "date",
-        "seller_name",
-        "seller_rating",
-    ]
+
+    products = data.get("products", [])
+    has_details = any(
+        any(k in row for k in ("location_detail", "details", "price_list", "description", "additional"))
+        for row in products
+    )
+
+    if has_details:
+        fieldnames = [
+            "index",
+            "name",
+            "url",
+            "title",
+            "price",
+            "location",
+            "date",
+            "location_detail",
+            "details",
+            "price_list",
+            "description",
+            "additional",
+            "seller_name",
+            "seller_rating",
+        ]
+    else:
+        fieldnames = [
+            "index",
+            "name",
+            "url",
+            "title",
+            "price",
+            "location",
+            "date",
+            "seller_name",
+            "seller_rating",
+        ]
+
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         s = data.get("seller_info", {})
-        for row in data["products"]:
+        for row in products:
             row_out = dict(row)
             row_out.update({
                 "seller_name": s.get("name", ""),

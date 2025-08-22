@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QStyleFactory,
+    QCheckBox,
 )
 
 # Import parser module regardless of execution context (package / script / PyInstaller)
@@ -58,9 +59,10 @@ class ParserThread(QThread):
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, links: List[str]):
+    def __init__(self, links: List[str], collect_details: bool):
         super().__init__()
         self.links = links
+        self.collect_details = collect_details
 
     def run(self):
         try:
@@ -69,8 +71,10 @@ class ParserThread(QThread):
             total_links = len(self.links)
             for idx, link in enumerate(self.links, start=1):
                 data = avito_parser.fetch_products_for_seller(link)
-                all_products.extend(data["products"])
-                # Keep first seller info if available
+                products = data.get("products", [])
+                if self.collect_details and products:
+                    avito_parser.collect_details_for_products(products)
+                all_products.extend(products)
                 if not seller_info and data.get("seller_info"):
                     seller_info = data["seller_info"]
                 progress_percent = int((idx / total_links) * 100)
@@ -106,6 +110,12 @@ class MainWindow(QWidget):
 
         self.links_edit = QTextEdit()
         layout.addWidget(self.links_edit)
+
+        options_layout = QHBoxLayout()
+        self.details_checkbox = QCheckBox("Собирать данные из карточек объявлений")
+        options_layout.addWidget(self.details_checkbox)
+        options_layout.addStretch()
+        layout.addLayout(options_layout)
 
         buttons_layout = QHBoxLayout()
         load_btn = QPushButton("Загрузить файл ссылок…")
@@ -192,7 +202,8 @@ class MainWindow(QWidget):
         self.save_btn.setEnabled(False)
         self.table.setRowCount(0)
 
-        self.parser_thread = ParserThread(links)
+        collect_details = self.details_checkbox.isChecked()
+        self.parser_thread = ParserThread(links, collect_details)
         self.parser_thread.progress.connect(self.on_progress)
         self.parser_thread.finished.connect(self.on_finished)
         self.parser_thread.error.connect(self.on_error)
