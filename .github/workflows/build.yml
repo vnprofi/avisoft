@@ -2,7 +2,7 @@ name: Build Avito Seller Parser
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ "**" ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -39,7 +39,6 @@ jobs:
       - name: Install Playwright browsers
         shell: bash
         run: |
-          # Скачиваем движок Chromium прямо в каталог проекта
           export PLAYWRIGHT_BROWSERS_PATH=ms-playwright
           python -m playwright install chromium
           ls -la ms-playwright/ || echo "Browser directory not found"
@@ -71,11 +70,30 @@ jobs:
               raise
           "
 
-      - name: Build application with PyInstaller (using spec file)
+      - name: Build application with PyInstaller
         shell: bash
         run: |
           pyinstaller AvitoSellerParser.spec --clean --noconfirm
-          ls -la dist/
+          ls -la dist/ || true
+
+      - name: Create DMG from .app (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -e
+          APP_PATH="dist/AvitoSellerParser.app"
+          if [ -d "$APP_PATH" ]; then
+            DMG_NAME="AvitoSellerParser-macOS.dmg"
+            # Create a temporary folder structure
+            mkdir -p dist/dmg_src
+            cp -R "$APP_PATH" dist/dmg_src/
+            hdiutil create -volname "AvitoSellerParser" -srcfolder dist/dmg_src -ov -format UDZO "dist/$DMG_NAME"
+            echo "DMG created: dist/$DMG_NAME"
+          else
+            echo "Expected .app bundle not found: $APP_PATH"
+            ls -la dist/
+            exit 1
+          fi
 
       - name: Test built executable (Windows)
         if: matrix.os == 'windows-latest'
@@ -90,19 +108,18 @@ jobs:
             exit 1
           fi
 
-      - name: Test built executable (macOS)
+      - name: Test built bundle (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
-          if [ -f "dist/AvitoSellerParser" ]; then
-            echo "✅ macOS executable built successfully"
-            file dist/AvitoSellerParser
-            chmod +x dist/AvitoSellerParser
-          elif [ -d "dist/AvitoSellerParser.app" ]; then
+          if [ -d "dist/AvitoSellerParser.app" ]; then
             echo "✅ macOS app bundle built successfully"
-            ls -la dist/AvitoSellerParser.app/Contents/MacOS/
+            ls -la dist/AvitoSellerParser.app/Contents/MacOS/ || true
+          elif [ -f "dist/AvitoSellerParser-macOS.dmg" ]; then
+            echo "✅ macOS DMG built successfully"
+            ls -la dist/AvitoSellerParser-macOS.dmg
           else
-            echo "❌ macOS executable not found"
+            echo "❌ macOS bundle not found"
             ls -la dist/
             exit 1
           fi

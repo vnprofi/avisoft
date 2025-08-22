@@ -2,7 +2,8 @@ import sys
 import os
 from typing import List
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -16,6 +17,9 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QTableWidget,
     QTableWidgetItem,
+    QHeaderView,
+    QStyleFactory,
+    QCheckBox,
 )
 
 # Import parser module regardless of execution context (package / script / PyInstaller)
@@ -55,9 +59,10 @@ class ParserThread(QThread):
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, links: List[str]):
+    def __init__(self, links: List[str], collect_details: bool):
         super().__init__()
         self.links = links
+        self.collect_details = collect_details
 
     def run(self):
         try:
@@ -66,8 +71,10 @@ class ParserThread(QThread):
             total_links = len(self.links)
             for idx, link in enumerate(self.links, start=1):
                 data = avito_parser.fetch_products_for_seller(link)
-                all_products.extend(data["products"])
-                # Keep first seller info if available
+                products = data.get("products", [])
+                if self.collect_details and products:
+                    avito_parser.collect_details_for_products(products)
+                all_products.extend(products)
                 if not seller_info and data.get("seller_info"):
                     seller_info = data["seller_info"]
                 progress_percent = int((idx / total_links) * 100)
@@ -86,8 +93,9 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Avito Seller Parser")
-        self.resize(800, 600)
+        self.resize(1000, 720)
         self._setup_ui()
+        self._apply_styles()
         self.parser_thread = None
         self.parsed_data = None
 
@@ -103,19 +111,33 @@ class MainWindow(QWidget):
         self.links_edit = QTextEdit()
         layout.addWidget(self.links_edit)
 
+        options_layout = QHBoxLayout()
+        self.details_checkbox = QCheckBox("Собирать данные из карточек объявлений")
+        options_layout.addWidget(self.details_checkbox)
+        options_layout.addStretch()
+        layout.addLayout(options_layout)
+
         buttons_layout = QHBoxLayout()
         load_btn = QPushButton("Загрузить файл ссылок…")
+        load_btn.setMinimumWidth(220)
         load_btn.clicked.connect(self.load_links_file)
         buttons_layout.addWidget(load_btn)
 
         parse_btn = QPushButton("Начать сбор данных")
+        parse_btn.setMinimumWidth(200)
         parse_btn.clicked.connect(self.start_parsing)
         buttons_layout.addWidget(parse_btn)
 
         self.save_btn = QPushButton("Сохранить результаты…")
         self.save_btn.setEnabled(False)
+        self.save_btn.setMinimumWidth(220)
         self.save_btn.clicked.connect(self.save_results)
         buttons_layout.addWidget(self.save_btn)
+
+        contact_btn = QPushButton("Связаться")
+        contact_btn.setMinimumWidth(140)
+        contact_btn.clicked.connect(self.open_contact)
+        buttons_layout.addWidget(contact_btn)
 
         buttons_layout.addStretch()
         layout.addLayout(buttons_layout)
@@ -135,10 +157,27 @@ class MainWindow(QWidget):
             "URL",
             "Title",
         ])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
 
         self.setLayout(layout)
+
+    def _apply_styles(self):
+        try:
+            QApplication.setStyle(QStyleFactory.create("Fusion"))
+        except Exception:
+            pass
+        self.setStyleSheet(
+            """
+            QWidget { font-size: 11pt; }
+            QPushButton { padding: 8px 14px; border-radius: 6px; }
+            QPushButton:disabled { color: #999; }
+            QProgressBar { height: 16px; border: 1px solid #c9c9c9; border-radius: 8px; }
+            QProgressBar::chunk { background-color: #2d89ef; border-radius: 8px; }
+            QTableWidget { gridline-color: #dcdcdc; }
+            """
+        )
 
     def load_links_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -163,7 +202,8 @@ class MainWindow(QWidget):
         self.save_btn.setEnabled(False)
         self.table.setRowCount(0)
 
-        self.parser_thread = ParserThread(links)
+        collect_details = self.details_checkbox.isChecked()
+        self.parser_thread = ParserThread(links, collect_details)
         self.parser_thread.progress.connect(self.on_progress)
         self.parser_thread.finished.connect(self.on_finished)
         self.parser_thread.error.connect(self.on_error)
@@ -215,6 +255,9 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "Успех", "Файл успешно сохранён.")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл: {e}")
+
+    def open_contact(self):
+        QDesktopServices.openUrl(QUrl("https://t.me/Userspoi"))
 
 
 def main():

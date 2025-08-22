@@ -26,6 +26,7 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
+!AvitoSellerParser.spec
 
 # Installer logs
 pip-log.txt
