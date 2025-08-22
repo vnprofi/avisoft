@@ -8,7 +8,6 @@ import random
 
 BASE_URL = "https://www.avito.ru"
 
-# Ротация User-Agent (только десктопные)
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -108,191 +107,269 @@ def extract_seller_products(url):
     return extract_from_html(html)
 
 
-def extract_product_details(page, url):
-    """Извлекает детальную информацию из карточки товара используя существующую страницу"""
+def extract_product_details_xpath(page, url):
+    """БЫСТРОЕ извлечение через XPath"""
     try:
-        # Меняем User-Agent для каждого запроса
-        page.context.add_init_script(
-            f"Object.defineProperty(navigator, 'userAgent', {{get: () => '{random.choice(USER_AGENTS)}'}});")
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)  # Сократили до 1.5 сек
 
-        page.goto(url, timeout=60000, wait_until="networkidle")
-        page.wait_for_timeout(random.randint(3000, 6000))  # Увеличенная пауза для полной загрузки
+        # Скролл для триггера загрузки элементов
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(500)
 
-        # Ждем загрузки основных элементов
+        # БЫСТРОЕ раскрытие прайс-листа - кликаем сразу
         try:
-            page.wait_for_selector('body', timeout=10000)
-            page.wait_for_load_state('domcontentloaded')
-            page.wait_for_load_state('networkidle')
-        except:
-            pass
-
-        # Принудительный скроллинг с несколькими попытками
-        try:
-            # Метод 1: Скролл через JavaScript
-            for i in range(3):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(1000)
-
-            # Метод 2: Скролл клавишей Page Down
-            page.keyboard.press("End")
-            page.wait_for_timeout(1000)
-
-            # Метод 3: Скролл по пикселям
-            page.evaluate("window.scrollBy(0, 3000)")
-            page.wait_for_timeout(1000)
-
-        except:
-            pass
-
-        # ИСПРАВЛЕННАЯ функция раскрытия прайс-листа
-        try:
-            # Вариант 1: Поиск по data-marker
-            price_list_buttons = page.query_selector_all('div._o8T3[data-marker*="PRICE_LIST_TITLE_MARKER"]')
-            print(f"Найдено кнопок прайс-листа (вариант 1): {len(price_list_buttons)}")
-
-            for button in price_list_buttons:
-                try:
-                    button.scroll_into_view_if_needed()
-                    page.wait_for_timeout(500)
-                    button.click()
-                    page.wait_for_timeout(1500)  # Увеличенное ожидание
-                    print("Кнопка прайс-листа нажата")
-                except Exception as e:
-                    print(f"Ошибка клика по кнопке: {e}")
-
-            # Вариант 2: Альтернативный поиск кнопок
-            if len(price_list_buttons) == 0:
-                alt_buttons = page.query_selector_all('div.gVNL7 div._o8T3')
-                print(f"Найдено кнопок прайс-листа (вариант 2): {len(alt_buttons)}")
-                for button in alt_buttons:
-                    try:
-                        button.click()
-                        page.wait_for_timeout(1000)
-                        print("Альтернативная кнопка прайс-листа нажата")
-                    except:
-                        pass
-
-            # Вариант 3: JavaScript клик
+            # Принудительный клик через JavaScript
             page.evaluate("""
-                const buttons = document.querySelectorAll('div[data-marker*="PRICE_LIST"], .gVNL7 ._o8T3, .gVNL7 .button');
-                console.log('Найдено кнопок через JS:', buttons.length);
-                buttons.forEach((btn, index) => {
-                    try {
+                const buttons = document.querySelectorAll('[data-marker*="PRICE_LIST_TITLE_MARKER"], .gVNL7 ._o8T3');
+                buttons.forEach(btn => {
+                    if (btn) {
                         btn.click();
-                        console.log('Кликнули по кнопке', index);
-                    } catch(e) {
-                        console.log('Ошибка клика', e);
+                        btn.dispatchEvent(new Event('click', {bubbles: true}));
+                        btn.dispatchEvent(new MouseEvent('mousedown'));
+                        btn.dispatchEvent(new MouseEvent('mouseup'));
                     }
                 });
             """)
-            page.wait_for_timeout(2000)
+
+            # Минимальное ожидание раскрытия
+            page.wait_for_timeout(800)
 
         except Exception as e:
-            print(f"Общая ошибка при раскрытии прайс-листа: {e}")
+            print(f"Ошибка раскрытия прайс-листа: {e}")
 
-        html = page.content()
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Извлекаем расположение из блока F3kIg
-        location_detail = ""
-        desc_blocks = soup.select('div.F3kIg')
-        for block in desc_blocks:
-            h2 = block.find('h2', class_='EEPdn')
-            if h2 and 'Расположение' in h2.get_text():
-                location_div = block.find('div', class_='ljYEJ')
-                if location_div:
-                    location_detail = clean_text(location_div)
-                break
-
-        # Извлекаем подробности
-        details = ""
-        details_block = soup.select_one('div.cK39j.gYppE.aoCbM div#bx_item-params')
-        if details_block:
-            details = clean_text(details_block)
-
-        # УЛУЧШЕННОЕ извлечение прайс-листа
-        price_list = extract_enhanced_price_list(soup)
-
-        # Извлекаем описание
-        description = ""
-        desc_block = soup.select_one('div.cK39j.PqCav.aoCbM div#bx_item-description')
-        if desc_block:
-            description = clean_text(desc_block)
-
-        # Извлекаем дополнительно (образование, курсы)
-        additional = ""
-        edu_block = soup.select_one('div.UaGSK div[data-marker="service-education/title"]')
-        if edu_block:
-            # Ищем родительский контейнер для получения всего содержимого
-            parent_block = edu_block.find_parent('div', class_='UaGSK')
-            if parent_block:
-                additional = clean_text(parent_block)
-
-        return {
-            "location_detail": location_detail,
-            "details": details,
-            "price_list": price_list,
-            "description": description,
-            "additional": additional
+        # Извлечение данных
+        result = {
+            "location_detail": extract_by_xpath(page,
+                                                "//div[@class='F3kIg']//h2[contains(text(), 'Расположение')]/following-sibling::div[@class='ljYEJ']"),
+            "details": extract_by_xpath(page, "//div[@id='bx_item-params']"),
+            "description": extract_by_xpath(page, "//div[@id='bx_item-description']"),
+            "additional": extract_by_xpath(page, "//div[@class='UaGSK']"),
+            "price_list": extract_price_list_xpath(page)
         }
+
+        return result
 
     except Exception as e:
         print(f"Ошибка при парсинге карточки {url}: {e}")
-        return {
-            "location_detail": "",
-            "details": "",
-            "price_list": "",
-            "description": "",
-            "additional": ""
+        return {"location_detail": "", "details": "", "price_list": "", "description": "", "additional": ""}
+
+
+def extract_product_details_xpath(page, url):
+    """БЫСТРОЕ извлечение через XPath"""
+    try:
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)  # Сократили до 1.5 сек
+
+        # Скролл для триггера загрузки элементов
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(500)
+
+        # БЫСТРОЕ раскрытие прайс-листа с проверкой
+        try:
+            for attempt in range(3):  # Максимум 3 попытки
+                # Клик по всем кнопкам прайс-листа
+                page.evaluate("""
+                    const buttons = document.querySelectorAll('[data-marker*="PRICE_LIST_TITLE_MARKER"], .gVNL7 ._o8T3, .gVNL7 .button');
+                    console.log('Найдено кнопок:', buttons.length);
+                    buttons.forEach((btn, i) => {
+                        console.log('Кликаем кнопку', i, btn.className);
+                        btn.click();
+                        btn.dispatchEvent(new Event('click', {bubbles: true}));
+                    });
+                """)
+
+                page.wait_for_timeout(600)
+
+                # Проверяем, появились ли услуги
+                price_items = page.query_selector_all('[data-marker*="PRICE_LIST_VALUE_MARKER"]')
+                print(f"Попытка {attempt + 1}: найдено {len(price_items)} услуг")
+
+                if len(price_items) > 0:
+                    break
+
+            if len(price_items) == 0:
+                print("Прайс-лист не раскрылся, пробуем альтернативный способ...")
+                # Альтернативный клик по любому элементу с "Прайс"
+                page.evaluate("""
+                    const elements = document.querySelectorAll('*');
+                    for (let el of elements) {
+                        if (el.textContent && el.textContent.includes('Прайс')) {
+                            el.click();
+                            break;
+                        }
+                    }
+                """)
+                page.wait_for_timeout(800)
+
+        except Exception as e:
+            print(f"Ошибка раскрытия прайс-листа: {e}")
+
+        # Извлечение данных
+        result = {
+            "location_detail": extract_by_xpath(page,
+                                                "//div[@class='F3kIg']//h2[contains(text(), 'Расположение')]/following-sibling::div[@class='ljYEJ']"),
+            "details": extract_by_xpath(page, "//div[@id='bx_item-params']"),
+            "description": extract_by_xpath(page, "//div[@id='bx_item-description']"),
+            "additional": extract_by_xpath(page, "//div[@class='UaGSK']"),
+            "price_list": extract_price_list_xpath(page)
         }
 
+        return result
 
-def extract_enhanced_price_list(soup):
-    """УЛУЧШЕННОЕ извлечение прайс-листа"""
-    price_list_parts = []
+    except Exception as e:
+        print(f"Ошибка при парсинге карточки {url}: {e}")
+        return {"location_detail": "", "details": "", "price_list": "", "description": "", "additional": ""}
 
-    # Основной блок прайс-листа
-    price_block = soup.select_one('div.gVNL7')
-    if not price_block:
+
+def extract_price_list_xpath(page):
+    """Улучшенное извлечение прайс-листа через XPath"""
+    try:
+        result_parts = []
+
+        # Заголовок прайс-листа
+        title_xpath = "//h2[@class='EEPdn' and contains(text(), 'Прайс-лист')]"
+        title = extract_by_xpath(page, title_xpath)
+        if title:
+            result_parts.append(f"=== {title} ===")
+
+        # Извлечение всех услуг
+        services_xpath = "//div[@data-marker[contains(., 'PRICE_LIST_VALUE_MARKER')]]"
+
+        try:
+            services = page.locator(f"xpath={services_xpath}")
+            count = services.count()
+            print(f"Найдено {count} услуг в прайс-листе")
+
+            for i in range(count):
+                service = services.nth(i)
+
+                # Название услуги - более точный селектор
+                name = ""
+                try:
+                    name_elem = service.locator(
+                        "xpath=.//p[contains(@class, 'T7ujv') and contains(@class, 'Tdsqf')]").first
+                    if name_elem.count() > 0:
+                        name = name_elem.inner_text(timeout=1000)
+                except:
+                    pass
+
+                # Цена
+                price = ""
+                try:
+                    price_elem = service.locator("xpath=.//strong[@class='OVzrF']").first
+                    if price_elem.count() > 0:
+                        price = price_elem.inner_text(timeout=1000)
+                except:
+                    pass
+
+                if name:
+                    service_line = f"• {clean_text_simple(name)}"
+                    if price:
+                        service_line += f": {clean_text_simple(price)}"
+                    result_parts.append(service_line)
+
+        except Exception as e:
+            print(f"Ошибка извлечения услуг: {e}")
+
+        # Если структурированно ничего не найдено - берем весь блок
+        if len(result_parts) <= 1:
+            full_block_xpath = "//div[@class='gVNL7']"
+            full_text = extract_by_xpath(page, full_block_xpath)
+            if full_text and len(full_text) > 20:
+                result_parts.append("Полный текст прайс-листа:")
+                result_parts.append(full_text)
+
+        return "\n".join(result_parts)
+
+    except Exception as e:
+        print(f"Ошибка извлечения прайс-листа: {e}")
         return ""
 
-    # Заголовок
-    title = price_block.select_one('h2.EEPdn')
-    if title:
-        price_list_parts.append(f"=== {clean_text(title)} ===")
 
-    # Все элементы прайс-листа
-    price_items = price_block.select('div[data-marker*="PRICE_LIST_VALUE_MARKER"]')
+def extract_by_xpath(page, xpath_expr):
+    """Быстрое извлечение текста по XPath"""
+    try:
+        element = page.locator(f"xpath={xpath_expr}").first
+        if element.count() > 0:
+            text = element.inner_text(timeout=2000)
+            return clean_text_simple(text)
+    except:
+        pass
+    return ""
 
-    for item in price_items:
-        # Название услуги
-        service_name = item.select_one('p.T7ujv.Tdsqf.G6wYF')
-        name_text = clean_text(service_name) if service_name else ""
 
-        # Цена
-        price_elem = item.select_one('strong.OVzrF')
-        price_text = clean_text(price_elem) if price_elem else ""
+def extract_price_list_xpath(page):
+    """Быстрое извлечение прайс-листа через XPath"""
+    try:
+        result_parts = []
 
-        # Дополнительная информация
-        additional_info = item.select_one('h1[data-marker="services-imv/title"]')
-        info_text = clean_text(additional_info) if additional_info else ""
+        # Заголовок прайс-листа
+        title_xpath = "//div[@class='gVNL7']//h2[@class='EEPdn']"
+        title = extract_by_xpath(page, title_xpath)
+        if title:
+            result_parts.append(f"=== {title} ===")
 
-        if name_text:
-            result_line = f"• {name_text}"
-            if price_text:
-                result_line += f": {price_text}"
-            if info_text and info_text != name_text:
-                result_line += f" ({info_text})"
-            price_list_parts.append(result_line)
+        # XPath для всех элементов прайс-листа
+        services_xpath = "//div[@data-marker[contains(., 'PRICE_LIST_VALUE_MARKER')]]"
 
-    # Если ничего не найдено, попробуем альтернативный метод
-    if len(price_list_parts) <= 1:  # только заголовок
-        all_text = clean_text(price_block)
-        if all_text and "Прайс-лист" in all_text:
-            price_list_parts.append("Полный текст прайс-листа:")
-            price_list_parts.append(all_text)
+        try:
+            services = page.locator(f"xpath={services_xpath}")
+            count = services.count()
+            print(f"Найдено {count} услуг в прайс-листе")
 
-    return "\n".join(price_list_parts) if price_list_parts else ""
+            for i in range(count):
+                service = services.nth(i)
+
+                # Название услуги
+                name_xpath = ".//p[contains(@class, 'T7ujv') and contains(@class, 'Tdsqf')]"
+                name = ""
+                try:
+                    name_elem = service.locator(f"xpath={name_xpath}").first
+                    if name_elem.count() > 0:
+                        name = name_elem.inner_text(timeout=1000)
+                except:
+                    pass
+
+                # Цена
+                price_xpath = ".//strong[@class='OVzrF']"
+                price = ""
+                try:
+                    price_elem = service.locator(f"xpath={price_xpath}").first
+                    if price_elem.count() > 0:
+                        price = price_elem.inner_text(timeout=1000)
+                except:
+                    pass
+
+                if name:
+                    service_line = f"• {clean_text_simple(name)}"
+                    if price:
+                        service_line += f": {clean_text_simple(price)}"
+                    result_parts.append(service_line)
+
+        except Exception as e:
+            print(f"Ошибка извлечения услуг: {e}")
+
+        # Если ничего не найдено структурированно - берем весь текст блока
+        if len(result_parts) <= 1:
+            full_block_xpath = "//div[@class='gVNL7']"
+            full_text = extract_by_xpath(page, full_block_xpath)
+            if full_text and len(full_text) > 20:
+                result_parts.append("Полный текст прайс-листа:")
+                result_parts.append(full_text)
+
+        return "\n".join(result_parts)
+
+    except Exception as e:
+        print(f"Ошибка извлечения прайс-листа: {e}")
+        return ""
+
+
+def clean_text_simple(text):
+    """Быстрая очистка текста"""
+    if not text:
+        return ""
+    return re.sub(r'\s+', ' ', text.replace('\xa0', ' ')).strip()
 
 
 def extract_from_html(html_content: str):
@@ -460,25 +537,30 @@ def main():
     while True:
         choice = input("\nСобирать данные из карточки каждого объявления? (да/нет): ").strip().lower()
         if choice in ['да', 'yes', 'y', 'д']:
-            print("Начинаем сбор детальной информации из карточек...")
+            print("Начинаем БЫСТРЫЙ сбор детальной информации через XPath...")
 
             # Создаем один браузер для всех карточек
             with sync_playwright() as p:
                 browser, context, page = create_browser_context(p)
 
                 try:
+                    start_time = time.time()
                     for i, product in enumerate(result["products"], 1):
                         print(f"Обрабатываем карточку {i}/{len(result['products'])}: {product['name']}")
 
-                        details = extract_product_details(page, product["url"])
+                        # БЫСТРАЯ функция через XPath
+                        details = extract_product_details_xpath(page, product["url"])
                         product["location_detail"] = details["location_detail"]
                         product["details"] = details["details"]
                         product["price_list"] = details["price_list"]
                         product["description"] = details["description"]
                         product["additional"] = details["additional"]
 
-                        # Случайная пауза между запросами
-                        time.sleep(random.uniform(3, 7))
+                        # СОКРАЩЕННАЯ пауза
+                        time.sleep(random.uniform(1.5, 3))  # Было 3-7 секунд
+
+                    elapsed = time.time() - start_time
+                    print(f"\n⚡ Обработка завершена за {elapsed:.1f} секунд!")
 
                 finally:
                     browser.close()
