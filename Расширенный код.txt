@@ -144,17 +144,51 @@ def extract_product_details(page, url):
         except:
             pass
 
-        # Пытаемся раскрыть прайс-лист если есть кнопка
+        # ИСПРАВЛЕННАЯ функция раскрытия прайс-листа
         try:
+            # Вариант 1: Поиск по data-marker
             price_list_buttons = page.query_selector_all('div._o8T3[data-marker*="PRICE_LIST_TITLE_MARKER"]')
+            print(f"Найдено кнопок прайс-листа (вариант 1): {len(price_list_buttons)}")
+
             for button in price_list_buttons:
                 try:
+                    button.scroll_into_view_if_needed()
+                    page.wait_for_timeout(500)
                     button.click()
-                    page.wait_for_timeout(1000)
-                except:
-                    pass
-        except:
-            pass
+                    page.wait_for_timeout(1500)  # Увеличенное ожидание
+                    print("Кнопка прайс-листа нажата")
+                except Exception as e:
+                    print(f"Ошибка клика по кнопке: {e}")
+
+            # Вариант 2: Альтернативный поиск кнопок
+            if len(price_list_buttons) == 0:
+                alt_buttons = page.query_selector_all('div.gVNL7 div._o8T3')
+                print(f"Найдено кнопок прайс-листа (вариант 2): {len(alt_buttons)}")
+                for button in alt_buttons:
+                    try:
+                        button.click()
+                        page.wait_for_timeout(1000)
+                        print("Альтернативная кнопка прайс-листа нажата")
+                    except:
+                        pass
+
+            # Вариант 3: JavaScript клик
+            page.evaluate("""
+                const buttons = document.querySelectorAll('div[data-marker*="PRICE_LIST"], .gVNL7 ._o8T3, .gVNL7 .button');
+                console.log('Найдено кнопок через JS:', buttons.length);
+                buttons.forEach((btn, index) => {
+                    try {
+                        btn.click();
+                        console.log('Кликнули по кнопке', index);
+                    } catch(e) {
+                        console.log('Ошибка клика', e);
+                    }
+                });
+            """)
+            page.wait_for_timeout(2000)
+
+        except Exception as e:
+            print(f"Общая ошибка при раскрытии прайс-листа: {e}")
 
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
@@ -176,11 +210,8 @@ def extract_product_details(page, url):
         if details_block:
             details = clean_text(details_block)
 
-        # Извлекаем прайс-лист
-        price_list = ""
-        price_block = soup.select_one('div.gVNL7')
-        if price_block:
-            price_list = clean_text(price_block)
+        # УЛУЧШЕННОЕ извлечение прайс-листа
+        price_list = extract_enhanced_price_list(soup)
 
         # Извлекаем описание
         description = ""
@@ -214,6 +245,54 @@ def extract_product_details(page, url):
             "description": "",
             "additional": ""
         }
+
+
+def extract_enhanced_price_list(soup):
+    """УЛУЧШЕННОЕ извлечение прайс-листа"""
+    price_list_parts = []
+
+    # Основной блок прайс-листа
+    price_block = soup.select_one('div.gVNL7')
+    if not price_block:
+        return ""
+
+    # Заголовок
+    title = price_block.select_one('h2.EEPdn')
+    if title:
+        price_list_parts.append(f"=== {clean_text(title)} ===")
+
+    # Все элементы прайс-листа
+    price_items = price_block.select('div[data-marker*="PRICE_LIST_VALUE_MARKER"]')
+
+    for item in price_items:
+        # Название услуги
+        service_name = item.select_one('p.T7ujv.Tdsqf.G6wYF')
+        name_text = clean_text(service_name) if service_name else ""
+
+        # Цена
+        price_elem = item.select_one('strong.OVzrF')
+        price_text = clean_text(price_elem) if price_elem else ""
+
+        # Дополнительная информация
+        additional_info = item.select_one('h1[data-marker="services-imv/title"]')
+        info_text = clean_text(additional_info) if additional_info else ""
+
+        if name_text:
+            result_line = f"• {name_text}"
+            if price_text:
+                result_line += f": {price_text}"
+            if info_text and info_text != name_text:
+                result_line += f" ({info_text})"
+            price_list_parts.append(result_line)
+
+    # Если ничего не найдено, попробуем альтернативный метод
+    if len(price_list_parts) <= 1:  # только заголовок
+        all_text = clean_text(price_block)
+        if all_text and "Прайс-лист" in all_text:
+            price_list_parts.append("Полный текст прайс-листа:")
+            price_list_parts.append(all_text)
+
+    return "\n".join(price_list_parts) if price_list_parts else ""
 
 
 def extract_from_html(html_content: str):
@@ -357,7 +436,7 @@ def save_to_csv(data, filename="avito_products.csv", detailed=False):
 
 
 def main():
-    url = "https://www.avito.ru/brands/8cbf4e5db1a75081a8fc4518d305c371/items?s=profile_search_show_all"
+    url = "https://www.avito.ru/brands/0659057cfce2a2ec703097e7e72ce397/all/predlozheniya_uslug?src=search_seller_info&iid=7584491465&sellerId=44fb53866f13711eda78418a617f6242"
 
     print("Начинаем парсинг товаров…")
     result = extract_seller_products(url)
