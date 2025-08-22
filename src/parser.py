@@ -312,15 +312,30 @@ def extract_product_details(page, url: str) -> Dict:
         except Exception:
             pass
 
-        # Try expand price list if present
+        # Раскрытие прайс-листа (улучшенная логика)
         try:
             price_list_buttons = page.query_selector_all('div._o8T3[data-marker*="PRICE_LIST_TITLE_MARKER"]')
             for button in price_list_buttons:
                 try:
+                    button.scroll_into_view_if_needed()
+                    page.wait_for_timeout(500)
                     button.click()
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(1500)
                 except Exception:
                     pass
+            if len(price_list_buttons) == 0:
+                alt_buttons = page.query_selector_all('div.gVNL7 div._o8T3')
+                for button in alt_buttons:
+                    try:
+                        button.click()
+                        page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
+            page.evaluate("""
+                const buttons = document.querySelectorAll('div[data-marker*="PRICE_LIST"], .gVNL7 ._o8T3, .gVNL7 .button');
+                buttons.forEach(btn => { try { btn.click(); } catch(e) {} });
+            """)
+            page.wait_for_timeout(2000)
         except Exception:
             pass
 
@@ -344,11 +359,8 @@ def extract_product_details(page, url: str) -> Dict:
         if details_block:
             details = _clean_node_text(details_block)
 
-        # Price list
-        price_list = ""
-        price_block = soup.select_one('div.gVNL7')
-        if price_block:
-            price_list = _clean_node_text(price_block)
+        # Price list (enhanced)
+        price_list = extract_enhanced_price_list(soup)
 
         # Description
         description = ""
@@ -380,6 +392,49 @@ def extract_product_details(page, url: str) -> Dict:
             "description": "",
             "additional": "",
         }
+
+
+def extract_enhanced_price_list(soup):
+    """УЛУЧШЕННОЕ извлечение прайс-листа (адаптировано под текущие helpers)."""
+    price_list_parts = []
+
+    price_block = soup.select_one('div.gVNL7')
+    if not price_block:
+        return ""
+
+    # Заголовок
+    title = price_block.select_one('h2.EEPdn')
+    if title:
+        price_list_parts.append(f"=== {_clean_node_text(title)} ===")
+
+    # Элементы прайс-листа
+    price_items = price_block.select('div[data-marker*="PRICE_LIST_VALUE_MARKER"]')
+    for item in price_items:
+        service_name = item.select_one('p.T7ujv.Tdsqf.G6wYF')
+        name_text = _clean_node_text(service_name) if service_name else ""
+
+        price_elem = item.select_one('strong.OVzrF')
+        price_text = _clean_node_text(price_elem) if price_elem else ""
+
+        additional_info = item.select_one('h1[data-marker="services-imv/title"]')
+        info_text = _clean_node_text(additional_info) if additional_info else ""
+
+        if name_text:
+            result_line = f"• {name_text}"
+            if price_text:
+                result_line += f": {price_text}"
+            if info_text and info_text != name_text:
+                result_line += f" ({info_text})"
+            price_list_parts.append(result_line)
+
+    # Фоллбек — взять весь текст блока
+    if len(price_list_parts) <= 1:
+        all_text = _clean_node_text(price_block)
+        if all_text and "Прайс-лист" in all_text:
+            price_list_parts.append("Полный текст прайс-листа:")
+            price_list_parts.append(all_text)
+
+    return "\n".join(price_list_parts) if price_list_parts else ""
 
 
 def collect_details_for_products(products: List[Dict]):
