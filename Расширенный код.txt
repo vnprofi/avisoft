@@ -18,35 +18,55 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 ]
 
+
 def get_random_headers():
     """Генерирует случайные заголовки"""
     return {
-        "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
-        "X-Real-IP": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
-        "CF-Connecting-IP": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}"
+        "X-Forwarded-For": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+        "X-Real-IP": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}",
+        "CF-Connecting-IP": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
     }
+
 
 def create_browser_context(playwright_instance):
     """Создает контекст браузера с антибан настройками"""
-    browser = playwright_instance.chromium.launch(headless=False)
+    browser = playwright_instance.chromium.launch(
+        headless=False,
+        args=[
+            '--disable-blink-features=AutomationControlled',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor',
+            '--no-sandbox',
+            '--disable-dev-shm-usage'
+        ]
+    )
     context = browser.new_context(
         viewport={"width": 1920, "height": 1080},
         user_agent=random.choice(USER_AGENTS),
         locale="ru-RU",
         timezone_id="Europe/Moscow",
-        extra_http_headers=get_random_headers()
+        extra_http_headers=get_random_headers(),
+        java_script_enabled=True,
+        bypass_csp=True,
+        ignore_https_errors=True
     )
-    
+
     page = context.new_page()
-    page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-    
+    page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru', 'en-US', 'en']});
+        window.chrome = { runtime: {} };
+    """)
+
     return browser, context, page
+
 
 def extract_seller_products(url):
     """Загружает страницу и возвращает распарсенные данные"""
     with sync_playwright() as p:
         browser, context, page = create_browser_context(p)
-        
+
         try:
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
@@ -87,14 +107,42 @@ def extract_seller_products(url):
 
     return extract_from_html(html)
 
+
 def extract_product_details(page, url):
     """Извлекает детальную информацию из карточки товара используя существующую страницу"""
     try:
         # Меняем User-Agent для каждого запроса
-        page.context.add_init_script(f"Object.defineProperty(navigator, 'userAgent', {{get: () => '{random.choice(USER_AGENTS)}'}});")
-        
-        page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(random.randint(2000, 5000))  # Случайная пауза
+        page.context.add_init_script(
+            f"Object.defineProperty(navigator, 'userAgent', {{get: () => '{random.choice(USER_AGENTS)}'}});")
+
+        page.goto(url, timeout=60000, wait_until="networkidle")
+        page.wait_for_timeout(random.randint(3000, 6000))  # Увеличенная пауза для полной загрузки
+
+        # Ждем загрузки основных элементов
+        try:
+            page.wait_for_selector('body', timeout=10000)
+            page.wait_for_load_state('domcontentloaded')
+            page.wait_for_load_state('networkidle')
+        except:
+            pass
+
+        # Принудительный скроллинг с несколькими попытками
+        try:
+            # Метод 1: Скролл через JavaScript
+            for i in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+
+            # Метод 2: Скролл клавишей Page Down
+            page.keyboard.press("End")
+            page.wait_for_timeout(1000)
+
+            # Метод 3: Скролл по пикселям
+            page.evaluate("window.scrollBy(0, 3000)")
+            page.wait_for_timeout(1000)
+
+        except:
+            pass
 
         # Пытаемся раскрыть прайс-лист если есть кнопка
         try:
@@ -167,6 +215,7 @@ def extract_product_details(page, url):
             "additional": ""
         }
 
+
 def extract_from_html(html_content: str):
     """Парсит страницу и собирает товары + инфо о продавце"""
     soup = BeautifulSoup(html_content, "html.parser")
@@ -205,12 +254,14 @@ def extract_from_html(html_content: str):
         "seller_info": seller_info,
     }
 
+
 def clean_text(node) -> str:
     if not node:
         return ""
     for svg in node.find_all("svg"):
         svg.decompose()
     return " ".join(node.stripped_strings).replace("\xa0", " ").strip()
+
 
 def extract_price(container) -> str:
     if not container:
@@ -231,6 +282,7 @@ def extract_price(container) -> str:
 
     return ""
 
+
 def extract_location(container) -> str:
     if not container:
         return ""
@@ -241,6 +293,7 @@ def extract_location(container) -> str:
 
     return ""
 
+
 def extract_date(container) -> str:
     """Извлекает дату размещения объявления"""
     if not container:
@@ -249,6 +302,7 @@ def extract_date(container) -> str:
     if date_p:
         return clean_text(date_p)
     return ""
+
 
 def extract_seller_info(soup):
     """Извлекает информацию о продавце"""
@@ -269,6 +323,7 @@ def extract_seller_info(soup):
 
     return seller_info
 
+
 def save_to_csv(data, filename="avito_products.csv", detailed=False):
     if not data.get("products"):
         print("Нет данных для сохранения")
@@ -285,7 +340,7 @@ def save_to_csv(data, filename="avito_products.csv", detailed=False):
                 "index", "name", "url", "title", "price", "location", "date",
                 "seller_name", "seller_rating",
             ]
-        
+
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
@@ -299,6 +354,7 @@ def save_to_csv(data, filename="avito_products.csv", detailed=False):
             writer.writerow(row_out)
 
     print(f"Данные сохранены в {filename}")
+
 
 def main():
     url = "https://www.avito.ru/brands/8cbf4e5db1a75081a8fc4518d305c371/items?s=profile_search_show_all"
@@ -326,39 +382,40 @@ def main():
         choice = input("\nСобирать данные из карточки каждого объявления? (да/нет): ").strip().lower()
         if choice in ['да', 'yes', 'y', 'д']:
             print("Начинаем сбор детальной информации из карточек...")
-            
+
             # Создаем один браузер для всех карточек
             with sync_playwright() as p:
                 browser, context, page = create_browser_context(p)
-                
+
                 try:
                     for i, product in enumerate(result["products"], 1):
                         print(f"Обрабатываем карточку {i}/{len(result['products'])}: {product['name']}")
-                        
+
                         details = extract_product_details(page, product["url"])
                         product["location_detail"] = details["location_detail"]
                         product["details"] = details["details"]
                         product["price_list"] = details["price_list"]
                         product["description"] = details["description"]
                         product["additional"] = details["additional"]
-                        
+
                         # Случайная пауза между запросами
                         time.sleep(random.uniform(3, 7))
-                        
+
                 finally:
                     browser.close()
-            
+
             save_to_csv(result, detailed=True)
             print("Сбор детальной информации завершен!")
             break
-            
+
         elif choice in ['нет', 'no', 'n', 'н']:
             save_to_csv(result, detailed=False)
             print("Работа завершена!")
             break
-            
+
         else:
             print("Пожалуйста, введите 'да' или 'нет'")
+
 
 if __name__ == "__main__":
     main()
