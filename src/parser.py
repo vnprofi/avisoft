@@ -252,6 +252,20 @@ def _fetch_html_playwright(url: str, scroll_pause: float = 0.5, max_scroll_attem
                     print(f"Ошибка во время скроллинга: {e}")
                     break
 
+            # Раскрыть описания в списке (expand-text), если есть
+            try:
+                expand_links = page.query_selector_all('a[data-marker="expand-text"]')
+                for link in expand_links:
+                    try:
+                        link.scroll_into_view_if_needed()
+                        page.wait_for_timeout(300)
+                        link.click()
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
             html = page.content()
             browser.close()
             return html
